@@ -4,6 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import requests
+import io
 
 # Page configuration
 st.set_page_config(
@@ -14,9 +15,9 @@ st.set_page_config(
 
 # Title and description
 st.title("🌍 Global Macroeconomic Data Dashboard")
-st.markdown("Explore key economic indicators from countries around the world using World Bank data")
+st.markdown("Explore key economic indicators from World Bank and OECD")
 
-# World Bank API endpoint
+# API endpoints
 WB_API = "https://api.worldbank.org/v2"
 
 @st.cache_data(ttl=3600)
@@ -28,7 +29,7 @@ def get_countries():
         data = response.json()
         countries = []
         for country in data[1]:
-            if country['capitalCity']:  # Filter for actual countries
+            if country['capitalCity']:
                 countries.append({
                     'id': country['id'],
                     'name': country['name'],
@@ -39,8 +40,8 @@ def get_countries():
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
-def get_indicator_data(country_codes, indicator_code, start_year=2000, end_year=2023):
-    """Fetch indicator data for specified countries"""
+def get_wb_indicator_data(country_codes, indicator_code, start_year=2000, end_year=2023):
+    """Fetch indicator data for specified countries from World Bank"""
     all_data = []
     
     for country in country_codes:
@@ -62,36 +63,110 @@ def get_indicator_data(country_codes, indicator_code, start_year=2000, end_year=
     
     return pd.DataFrame(all_data)
 
+@st.cache_data(ttl=3600)
+def get_oecd_countries():
+    """Get list of OECD countries with their codes"""
+    country_map = {
+        'AUS': 'Australia', 'AUT': 'Austria', 'BEL': 'Belgium', 'CAN': 'Canada',
+        'CHL': 'Chile', 'COL': 'Colombia', 'CRI': 'Costa Rica', 'CZE': 'Czech Republic',
+        'DNK': 'Denmark', 'EST': 'Estonia', 'FIN': 'Finland', 'FRA': 'France',
+        'DEU': 'Germany', 'GRC': 'Greece', 'HUN': 'Hungary', 'ISL': 'Iceland',
+        'IRL': 'Ireland', 'ISR': 'Israel', 'ITA': 'Italy', 'JPN': 'Japan',
+        'KOR': 'South Korea', 'LVA': 'Latvia', 'LTU': 'Lithuania', 'LUX': 'Luxembourg',
+        'MEX': 'Mexico', 'NLD': 'Netherlands', 'NZL': 'New Zealand', 'NOR': 'Norway',
+        'POL': 'Poland', 'PRT': 'Portugal', 'SVK': 'Slovakia', 'SVN': 'Slovenia',
+        'ESP': 'Spain', 'SWE': 'Sweden', 'CHE': 'Switzerland', 'TUR': 'Turkey',
+        'GBR': 'United Kingdom', 'USA': 'United States'
+    }
+    
+    return pd.DataFrame([
+        {'code': code, 'name': name} 
+        for code, name in country_map.items()
+    ])
+
+@st.cache_data(ttl=3600)
+def get_oecd_data_direct(countries, indicator_key):
+    """Fetch OECD data using direct data.oecd.org URLs"""
+    
+    # Simple indicator codes that work with data.oecd.org
+    indicator_map = {
+        'Labour Productivity (GDP per hour)': 'lprod',
+        'GDP per Hour Worked': 'lprod',
+        'Unemployment Rate': 'unemp',
+    }
+    
+    if indicator_key not in indicator_map:
+        return pd.DataFrame()
+    
+    indicator_code = indicator_map[indicator_key]
+    all_data = []
+    
+    for country_code in countries:
+        try:
+            # Using the simple data.oecd.org format
+            url = f"https://data.oecd.org/api/v1/data/{indicator_code}/{country_code}"
+            
+            response = requests.get(url, headers={'Accept': 'application/json'})
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Parse the response
+                if isinstance(data, list):
+                    for entry in data:
+                        if 'time' in entry and 'value' in entry:
+                            country_name = next((c['name'] for c in get_oecd_countries().to_dict('records') 
+                                               if c['code'] == country_code), country_code)
+                            all_data.append({
+                                'Country': country_name,
+                                'Year': int(entry['time']),
+                                'Value': float(entry['value'])
+                            })
+        except Exception as e:
+            st.error(f"Error fetching {country_code}: {str(e)}")
+            continue
+    
+    return pd.DataFrame(all_data)
+
+# Simpler approach: Use World Bank for everything including productivity proxies
+@st.cache_data(ttl=3600) 
+def get_productivity_proxy_data(country_codes, start_year=2000, end_year=2023):
+    """Get productivity-related indicators from World Bank"""
+    # GDP per person employed is a good proxy for labor productivity
+    return get_wb_indicator_data(country_codes, 'SL.GDP.PCAP.EM.KD', start_year, end_year)
+
 # Define economic indicators
-indicators = {
+wb_indicators = {
     'GDP Growth (annual %)': 'NY.GDP.MKTP.KD.ZG',
     'GDP per capita (current US$)': 'NY.GDP.PCAP.CD',
+    'GDP per capita, PPP (constant 2017 international $)': 'NY.GDP.PCAP.PP.KD',
+    'GDP per person employed (constant 2021 PPP $)': 'SL.GDP.PCAP.EM.KD',
     'Inflation (consumer prices %)': 'FP.CPI.TOTL.ZG',
     'Unemployment (% of labor force)': 'SL.UEM.TOTL.ZS',
+    'Labor Force Participation Rate (%)': 'SL.TLF.CACT.ZS',
+    'Employment to Population Ratio (%)': 'SL.EMP.TOTL.SP.ZS',
+    'Gross Capital Formation (% of GDP)': 'NE.GDI.TOTL.ZS',
     'Foreign Direct Investment (% of GDP)': 'BX.KLT.DINV.WD.GD.ZS',
     'Trade (% of GDP)': 'NE.TRD.GNFS.ZS',
     'Government Debt (% of GDP)': 'GC.DOD.TOTL.GD.ZS',
-    'Population, total': 'SP.POP.TOTL'
+    'Research and Development (% of GDP)': 'GB.XPD.RSDV.GD.ZS',
+    'Population, total': 'SP.POP.TOTL',
 }
 
 # Sidebar for user inputs
 st.sidebar.header("📊 Data Selection")
 
-# Load countries
 countries_df = get_countries()
 
 if not countries_df.empty:
-    # Region filter
     regions = ['All'] + sorted(countries_df['region'].unique().tolist())
     selected_region = st.sidebar.selectbox("Select Region", regions)
     
-    # Filter countries by region
     if selected_region != 'All':
         filtered_countries = countries_df[countries_df['region'] == selected_region]
     else:
         filtered_countries = countries_df
     
-    # Country selection
     default_countries = ['United States', 'China', 'Germany', 'Japan', 'United Kingdom']
     available_defaults = [c for c in default_countries if c in filtered_countries['name'].values]
     
@@ -101,13 +176,13 @@ if not countries_df.empty:
         default=available_defaults[:3] if available_defaults else filtered_countries['name'].head(3).tolist()
     )
     
-    # Indicator selection
     selected_indicator = st.sidebar.selectbox(
         "Select Economic Indicator",
-        options=list(indicators.keys())
+        options=list(wb_indicators.keys())
     )
     
-    # Year range
+    indicator_code = wb_indicators[selected_indicator]
+    
     col1, col2 = st.sidebar.columns(2)
     start_year = col1.number_input("Start Year", min_value=1960, max_value=2023, value=2000)
     end_year = col2.number_input("End Year", min_value=1960, max_value=2023, value=2023)
@@ -115,31 +190,25 @@ if not countries_df.empty:
     if start_year > end_year:
         st.sidebar.error("⚠️ Start year must be before end year")
     
-    # Fetch and display data
     if selected_countries and st.sidebar.button("📈 Load Data", type="primary"):
         if start_year > end_year:
             st.error("⚠️ Start year must be before end year")
         else:
             with st.spinner("Fetching data from World Bank..."):
-                # Get country codes
                 country_codes = filtered_countries[filtered_countries['name'].isin(selected_countries)]['id'].tolist()
                 
-                # Fetch data
-                indicator_code = indicators[selected_indicator]
-                df = get_indicator_data(country_codes, indicator_code, start_year, end_year)
+                df = get_wb_indicator_data(country_codes, indicator_code, start_year, end_year)
                 
                 if not df.empty:
-                    # Check actual data range
                     actual_start = df['Year'].min()
                     actual_end = df['Year'].max()
                     
                     if actual_start > start_year or actual_end < end_year:
-                        st.info(f"ℹ️ Data available from {actual_start} to {actual_end}. Some requested years may not have data.")
+                        st.info(f"ℹ️ Data available from {actual_start} to {actual_end}.")
                     
-                    # Display metrics
                     st.subheader(f"📊 {selected_indicator}")
+                    st.caption("Source: World Bank Open Data")
                     
-                    # Latest year metrics
                     latest_year = df['Year'].max()
                     latest_data = df[df['Year'] == latest_year]
                     
@@ -154,7 +223,6 @@ if not countries_df.empty:
                                 delta=f"Year: {latest_year}"
                             )
                     
-                    # Time series chart
                     st.subheader("📈 Time Series")
                     fig = px.line(
                         df,
@@ -172,7 +240,6 @@ if not countries_df.empty:
                     )
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # Bar chart comparison for latest year
                     st.subheader(f"📊 Comparison for {latest_year}")
                     fig_bar = px.bar(
                         latest_data.sort_values('Value', ascending=False),
@@ -186,12 +253,10 @@ if not countries_df.empty:
                     fig_bar.update_layout(height=400)
                     st.plotly_chart(fig_bar, use_container_width=True)
                     
-                    # Data table
                     with st.expander("📋 View Raw Data"):
                         pivot_df = df.pivot(index='Year', columns='Country', values='Value')
                         st.dataframe(pivot_df.sort_index(ascending=False), use_container_width=True)
                         
-                        # Download button
                         csv = pivot_df.to_csv()
                         st.download_button(
                             label="⬇️ Download CSV",
@@ -200,24 +265,37 @@ if not countries_df.empty:
                             mime="text/csv"
                         )
                 else:
-                    st.warning("⚠️ No data available for the selected countries and time period. Try a different year range (most data starts from 1960).")
-    
-    # Information section
-    with st.sidebar.expander("ℹ️ About"):
-        st.markdown("""
-        This dashboard provides access to key macroeconomic indicators from the World Bank database.
-        
-        **Data Source:** World Bank Open Data
-        
-        **Data Availability:** Most indicators have data from 1960 onwards. Some indicators may have limited historical data.
-        
-        **Available Indicators:**
-        - GDP Growth & Per Capita
-        - Inflation Rates
-        - Unemployment
-        - Foreign Investment
-        - Trade & Government Debt
-        - Population Statistics
-        """)
+                    st.warning("⚠️ No data available for the selected countries and time period.")
 else:
     st.error("Unable to load country data. Please check your internet connection.")
+
+with st.sidebar.expander("ℹ️ About"):
+    st.markdown("""
+    This dashboard provides access to macroeconomic indicators from the World Bank.
+    
+    **Available Indicators** (1960-2023)
+    
+    *Economic Growth & Output:*
+    - GDP Growth & Per Capita (current & PPP)
+    - GDP per person employed (labor productivity)
+    
+    *Labor Market:*
+    - Unemployment Rate
+    - Labor Force Participation
+    - Employment to Population Ratio
+    
+    *Investment & Capital:*
+    - Gross Capital Formation (investment rate)
+    - Foreign Direct Investment
+    - Research and Development expenditure
+    
+    *Trade & Fiscal:*
+    - Trade as % of GDP
+    - Government Debt
+    - Inflation (CPI)
+    
+    *Demographics:*
+    - Total Population
+    
+    **Data Source:** World Bank Open Data
+    """)
