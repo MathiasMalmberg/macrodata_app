@@ -112,82 +112,95 @@ if not countries_df.empty:
     start_year = col1.number_input("Start Year", min_value=1960, max_value=2023, value=2000)
     end_year = col2.number_input("End Year", min_value=1960, max_value=2023, value=2023)
     
+    if start_year > end_year:
+        st.sidebar.error("⚠️ Start year must be before end year")
+    
     # Fetch and display data
     if selected_countries and st.sidebar.button("📈 Load Data", type="primary"):
-        with st.spinner("Fetching data from World Bank..."):
-            # Get country codes
-            country_codes = filtered_countries[filtered_countries['name'].isin(selected_countries)]['id'].tolist()
-            
-            # Fetch data
-            indicator_code = indicators[selected_indicator]
-            df = get_indicator_data(country_codes, indicator_code, start_year, end_year)
-            
-            if not df.empty:
-                # Display metrics
-                st.subheader(f"📊 {selected_indicator}")
+        if start_year > end_year:
+            st.error("⚠️ Start year must be before end year")
+        else:
+            with st.spinner("Fetching data from World Bank..."):
+                # Get country codes
+                country_codes = filtered_countries[filtered_countries['name'].isin(selected_countries)]['id'].tolist()
                 
-                # Latest year metrics
-                latest_year = df['Year'].max()
-                latest_data = df[df['Year'] == latest_year]
+                # Fetch data
+                indicator_code = indicators[selected_indicator]
+                df = get_indicator_data(country_codes, indicator_code, start_year, end_year)
                 
-                cols = st.columns(len(selected_countries))
-                for idx, country in enumerate(selected_countries):
-                    country_latest = latest_data[latest_data['Country'] == country]
-                    if not country_latest.empty:
-                        value = country_latest['Value'].values[0]
-                        cols[idx].metric(
-                            label=country,
-                            value=f"{value:,.2f}",
-                            delta=f"Year: {latest_year}"
-                        )
-                
-                # Time series chart
-                st.subheader("📈 Time Series")
-                fig = px.line(
-                    df,
-                    x='Year',
-                    y='Value',
-                    color='Country',
-                    title=f"{selected_indicator} Over Time",
-                    labels={'Value': selected_indicator},
-                    markers=True
-                )
-                fig.update_layout(
-                    hovermode='x unified',
-                    height=500,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Bar chart comparison for latest year
-                st.subheader(f"📊 Comparison for {latest_year}")
-                fig_bar = px.bar(
-                    latest_data.sort_values('Value', ascending=False),
-                    x='Country',
-                    y='Value',
-                    color='Value',
-                    title=f"{selected_indicator} - {latest_year}",
-                    labels={'Value': selected_indicator},
-                    color_continuous_scale='viridis'
-                )
-                fig_bar.update_layout(height=400)
-                st.plotly_chart(fig_bar, use_container_width=True)
-                
-                # Data table
-                with st.expander("📋 View Raw Data"):
-                    pivot_df = df.pivot(index='Year', columns='Country', values='Value')
-                    st.dataframe(pivot_df.sort_index(ascending=False), use_container_width=True)
+                if not df.empty:
+                    # Check actual data range
+                    actual_start = df['Year'].min()
+                    actual_end = df['Year'].max()
                     
-                    # Download button
-                    csv = pivot_df.to_csv()
-                    st.download_button(
-                        label="⬇️ Download CSV",
-                        data=csv,
-                        file_name=f"{selected_indicator.replace(' ', '_')}_{start_year}_{end_year}.csv",
-                        mime="text/csv"
+                    if actual_start > start_year or actual_end < end_year:
+                        st.info(f"ℹ️ Data available from {actual_start} to {actual_end}. Some requested years may not have data.")
+                    
+                    # Display metrics
+                    st.subheader(f"📊 {selected_indicator}")
+                    
+                    # Latest year metrics
+                    latest_year = df['Year'].max()
+                    latest_data = df[df['Year'] == latest_year]
+                    
+                    cols = st.columns(len(selected_countries))
+                    for idx, country in enumerate(selected_countries):
+                        country_latest = latest_data[latest_data['Country'] == country]
+                        if not country_latest.empty:
+                            value = country_latest['Value'].values[0]
+                            cols[idx].metric(
+                                label=country,
+                                value=f"{value:,.2f}",
+                                delta=f"Year: {latest_year}"
+                            )
+                    
+                    # Time series chart
+                    st.subheader("📈 Time Series")
+                    fig = px.line(
+                        df,
+                        x='Year',
+                        y='Value',
+                        color='Country',
+                        title=f"{selected_indicator} Over Time",
+                        labels={'Value': selected_indicator},
+                        markers=True
                     )
-            else:
-                st.warning("⚠️ No data available for the selected countries and time period.")
+                    fig.update_layout(
+                        hovermode='x unified',
+                        height=500,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Bar chart comparison for latest year
+                    st.subheader(f"📊 Comparison for {latest_year}")
+                    fig_bar = px.bar(
+                        latest_data.sort_values('Value', ascending=False),
+                        x='Country',
+                        y='Value',
+                        color='Value',
+                        title=f"{selected_indicator} - {latest_year}",
+                        labels={'Value': selected_indicator},
+                        color_continuous_scale='viridis'
+                    )
+                    fig_bar.update_layout(height=400)
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                    
+                    # Data table
+                    with st.expander("📋 View Raw Data"):
+                        pivot_df = df.pivot(index='Year', columns='Country', values='Value')
+                        st.dataframe(pivot_df.sort_index(ascending=False), use_container_width=True)
+                        
+                        # Download button
+                        csv = pivot_df.to_csv()
+                        st.download_button(
+                            label="⬇️ Download CSV",
+                            data=csv,
+                            file_name=f"{selected_indicator.replace(' ', '_')}_{start_year}_{end_year}.csv",
+                            mime="text/csv"
+                        )
+                else:
+                    st.warning("⚠️ No data available for the selected countries and time period. Try a different year range (most data starts from 1960).")
     
     # Information section
     with st.sidebar.expander("ℹ️ About"):
@@ -195,6 +208,8 @@ if not countries_df.empty:
         This dashboard provides access to key macroeconomic indicators from the World Bank database.
         
         **Data Source:** World Bank Open Data
+        
+        **Data Availability:** Most indicators have data from 1960 onwards. Some indicators may have limited historical data.
         
         **Available Indicators:**
         - GDP Growth & Per Capita
